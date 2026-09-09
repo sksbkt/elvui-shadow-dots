@@ -5,11 +5,12 @@
 ## Version: 0.1
 
 ## RequiredDeps: ElvUI
+## SavedVariables: ShadowDotsDB
 
 Core.lua
 Nameplates.lua
-Tracker.lua
 AuraScanner.lua
 Priority.lua
-Options.lua
 Config.lua
+Tracker.lua
+Options.lua

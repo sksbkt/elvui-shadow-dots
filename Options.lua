@@ -1,363 +1,269 @@
-local addonName = ...
+local E = unpack(ElvUI)
+local plugin = LibStub("LibElvUIPlugin-1.0", true)
 
-ShadowDotsDB = ShadowDotsDB or {
+local function Refresh()
+    if ShadowDots_RefreshVisuals then
+        ShadowDots_RefreshVisuals()
+    end
+end
 
-    enableVTColor = true,
-    enableSWPColor = true,
-    enableBothColor = true,
+local function SetEnabled(value)
+    ShadowDotsDB.enabled = value
+    ShadowDots_CheckSpec()
+end
 
-    enableScale = true,
-    scaleSize = 1.15,
+local function SetColor(key, r, g, b)
+    ShadowDotsDB[key] = { r = r, g = g, b = b }
+    Refresh()
+end
 
-    vtColor = {
-        r = 0.6,
-        g = 0,
-        b = 1,
-    },
-
-    swpColor = {
-        r = 1,
-        g = 0.5,
-        b = 0,
-    },
-
-    bothColor = {
-        r = 1,
-        g = 0,
-        b = 0.8,
-    },
-
-}
-
-
-
-local panel = CreateFrame(
-    "Frame",
-    "ShadowDotsOptionsPanel",
-    InterfaceOptionsFramePanelContainer
-)
-
-
-panel.name = "ShadowDots"
-
-
-
-local title = panel:CreateFontString(
-    nil,
-    "ARTWORK",
-    "GameFontNormalLarge"
-)
-
-title:SetPoint(
-    "TOPLEFT",
-    16,
-    -16
-)
-
-title:SetText(
-    "ShadowDots Settings"
-)
-
-
-
-local function RefreshColors()
-
-    if ShadowDots_IsShadowPriest and not ShadowDots_IsShadowPriest() then
+local function RegisterOptions()
+    local ACR = LibStub("AceConfigRegistry-3.0-ElvUI", true)
+    if not E or not E.Options or not ACR then
         return
     end
 
+    local shadowdotsOptions = {
+        type = "group",
+        name = "ShadowDots",
+        order = 20,
+        childGroups = "tab",
+        args = {
+            about = {
+                type = "group",
+                name = "About / Welcome",
+                order = 1,
+                args = {
+                    title = {
+                        type = "header",
+                        name = "|cffb366ffElvUI ShadowDots|r",
+                        order = 1,
+                    },
+                    subtitle = {
+                        type = "description",
+                        name = "|cffd8c8e8Shadow Priest Nameplate & DoT System|r\n|cff999999Legion 7.2.5 / WoWZone|r",
+                        order = 2,
+                    },
+                    spacer = {
+                        type = "description",
+                        name = " ",
+                        order = 3,
+                    },
+                    creator = {
+                        type = "description",
+                        name = "|cffffd966Created by|r\n|cffffffffHexman (Narco)|r",
+                        order = 4,
+                        fontSize = "large",
+                    },
+                    description = {
+                        type = "description",
+                        name = "\nDesigned and developed for WoWZone 7.2.5.",
+                        order = 5,
+                    },
+                },
+            },
+            general = {
+                type = "group",
+                name = "General",
+                order = 2,
+                args = {
+                    enabled = {
+                        type = "toggle",
+                        name = "Enable ShadowDots",
+                        order = 1,
+                        get = function() return ShadowDotsDB.enabled end,
+                        set = function(_, value) SetEnabled(value) end,
+                    },
+                    status = {
+                        type = "description",
+                        name = function()
+                            if ShadowDots_IsShadowPriest() then
+                                return "|cff20ff20Shadow specialization detected: Enabled|r"
+                            end
+                            return "|cffff2020Shadow specialization not detected: Inactive|r"
+                        end,
+                        order = 2,
+                    },
+                },
+            },
+            colors = {
+                type = "group",
+                name = "DoT Colors",
+                order = 3,
+                args = {
+                    swp = {
+                        type = "color",
+                        name = "Shadow Word: Pain Only",
+                        order = 1,
+                        get = function()
+                            local c = ShadowDotsDB.swpColor
+                            return c.r, c.g, c.b
+                        end,
+                        set = function(_, r, g, b) SetColor("swpColor", r, g, b) end,
+                    },
+                    vt = {
+                        type = "color",
+                        name = "Vampiric Touch Only",
+                        order = 2,
+                        get = function()
+                            local c = ShadowDotsDB.vtColor
+                            return c.r, c.g, c.b
+                        end,
+                        set = function(_, r, g, b) SetColor("vtColor", r, g, b) end,
+                    },
+                    both = {
+                        type = "color",
+                        name = "Both SW:P + VT",
+                        order = 3,
+                        get = function()
+                            local c = ShadowDotsDB.bothColor
+                            return c.r, c.g, c.b
+                        end,
+                        set = function(_, r, g, b) SetColor("bothColor", r, g, b) end,
+                    },
+                },
+            },
+            expiration = {
+                type = "group",
+                name = "Expiration / Blinking",
+                order = 4,
+                args = {
+                    enabled = {
+                        type = "toggle",
+                        name = "Enable Blinking",
+                        order = 1,
+                        get = function() return ShadowDotsDB.blinkEnabled end,
+                        set = function(_, value)
+                            ShadowDotsDB.blinkEnabled = value
+                            if value and ShadowDots.enabled then
+                                ShadowDots_StartBlinking()
+                            elseif not value then
+                                ShadowDots_StopBlinking()
+                            end
+                        end,
+                    },
+                    threshold = {
+                        type = "range",
+                        name = "Expiration Threshold",
+                        min = 0.5,
+                        max = 10,
+                        step = 0.5,
+                        order = 2,
+                        get = function() return ShadowDotsDB.blinkThreshold end,
+                        set = function(_, value) ShadowDotsDB.blinkThreshold = value end,
+                    },
+                    speed = {
+                        type = "range",
+                        name = "Blink Speed",
+                        min = 0.05,
+                        max = 1,
+                        step = 0.05,
+                        order = 3,
+                        get = function() return ShadowDotsDB.blinkSpeed end,
+                        set = function(_, value) ShadowDotsDB.blinkSpeed = value end,
+                    },
+                    swp = {
+                        type = "toggle",
+                        name = "Blink SW:P",
+                        order = 4,
+                        get = function() return ShadowDotsDB.blinkSWP end,
+                        set = function(_, value) ShadowDotsDB.blinkSWP = value end,
+                    },
+                    vt = {
+                        type = "toggle",
+                        name = "Blink VT",
+                        order = 5,
+                        get = function() return ShadowDotsDB.blinkVT end,
+                        set = function(_, value) ShadowDotsDB.blinkVT = value end,
+                    },
+                    alpha = {
+                        type = "range",
+                        name = "Blink Alpha",
+                        min = 0.05,
+                        max = 1,
+                        step = 0.05,
+                        order = 6,
+                        get = function() return ShadowDotsDB.blinkAlpha end,
+                        set = function(_, value) ShadowDotsDB.blinkAlpha = value end,
+                    },
+                },
+            },
+            priority = {
+                type = "group",
+                name = "Priority / Tracker",
+                order = 5,
+                args = {
+                    enableScale = {
+                        type = "toggle",
+                        name = "Enable Priority Scale",
+                        order = 1,
+                        get = function() return ShadowDotsDB.enableScale end,
+                        set = function(_, value)
+                            ShadowDotsDB.enableScale = value
+                            Refresh()
+                        end,
+                    },
+                    scaleSize = {
+                        type = "range",
+                        name = "Priority Scale",
+                        min = 1,
+                        max = 2,
+                        step = 0.05,
+                        order = 2,
+                        get = function() return ShadowDotsDB.scaleSize end,
+                        set = function(_, value)
+                            ShadowDotsDB.scaleSize = value
+                            Refresh()
+                        end,
+                    },
+                },
+            },
+            debug = {
+                type = "group",
+                name = "Debug",
+                order = 6,
+                args = {
+                    enabled = {
+                        type = "toggle",
+                        name = "Enable Debug Messages",
+                        order = 1,
+                        get = function() return ShadowDotsDB.debug end,
+                        set = function(_, value)
+                            ShadowDotsDB.debug = value
+                            if value and ShadowDots_StartWatchdog then
+                                ShadowDots_StartWatchdog()
+                            elseif not value and ShadowDots_StopWatchdog then
+                                ShadowDots_StopWatchdog()
+                            end
+                        end,
+                    },
+                },
+            },
+        },
+    }
 
-    if ShadowDots_HighlightTarget then
-        ShadowDots_HighlightTarget()
+    local nameplateOptions = E.Options.args.nameplate
+    if nameplateOptions and nameplateOptions.args then
+        nameplateOptions.args.shadowdots = shadowdotsOptions
+        shadowdotsOptions.order = 90
+        ShadowDots.configPath = {"nameplate", "shadowdots"}
+    else
+        E.Options.args.shadowdots = shadowdotsOptions
+        ShadowDots.configPath = {"shadowdots"}
     end
 
+    ACR:NotifyChange("ElvUI")
 end
 
-
-
-
-local function CreateColorBox(parent, x, y, variable)
-
-    local box = CreateFrame(
-        "Button",
-        nil,
-        parent
-    )
-
-
-    box:SetSize(
-        22,
-        22
-    )
-
-
-    box:SetPoint(
-        "TOPLEFT",
-        x,
-        y
-    )
-
-
-    box.texture = box:CreateTexture(
-        nil,
-        "BACKGROUND"
-    )
-
-
-    box.texture:SetAllPoints()
-
-
-
-    local function Update()
-
-        local c = ShadowDotsDB[variable]
-
-
-        box.texture:SetColorTexture(
-            c.r,
-            c.g,
-            c.b
-        )
-
-    end
-
-
-    Update()
-
-
-
-    box:SetScript(
-        "OnClick",
-        function()
-
-
-            local c = ShadowDotsDB[variable]
-
-
-            ColorPickerFrame:SetColorRGB(
-                c.r,
-                c.g,
-                c.b
-            )
-
-
-            ColorPickerFrame.func = function()
-
-
-                local r, g, b =
-                    ColorPickerFrame:GetColorRGB()
-
-
-                ShadowDotsDB[variable] = {
-
-                    r = r,
-                    g = g,
-                    b = b,
-
-                }
-
-
-                Update()
-
-                RefreshColors()
-
-
-            end
-
-
-            ColorPickerFrame:Show()
-
-
-        end
-    )
-
-
+if plugin then
+    plugin:RegisterPlugin("ElvUI_ShadowDots", RegisterOptions)
 end
-
-
-
-
-local function CreateCheckbox(
-    text,
-    x,
-    y,
-    variable,
-    colorVariable
-)
-
-
-    local check = CreateFrame(
-        "CheckButton",
-        nil,
-        panel,
-        "InterfaceOptionsCheckButtonTemplate"
-    )
-
-
-    check:SetPoint(
-        "TOPLEFT",
-        x,
-        y
-    )
-
-
-    check.Text:SetText(text)
-
-
-    check:SetChecked(
-        ShadowDotsDB[variable]
-    )
-
-
-
-    check:SetScript(
-        "OnClick",
-        function(self)
-
-
-            ShadowDotsDB[variable] =
-                self:GetChecked()
-
-
-            RefreshColors()
-
-
-        end
-    )
-
-
-
-    if colorVariable then
-
-
-        CreateColorBox(
-            panel,
-            x + 250,
-            y,
-            colorVariable
-        )
-
-
-    end
-
-
-end
-
-
-
-
-CreateCheckbox(
-    "Missing Vampiric Touch",
-    20,
-    -60,
-    "enableVTColor",
-    "vtColor"
-)
-
-
-
-CreateCheckbox(
-    "Missing Shadow Word: Pain",
-    20,
-    -100,
-    "enableSWPColor",
-    "swpColor"
-)
-
-
-
-CreateCheckbox(
-    "Missing Both Dots",
-    20,
-    -140,
-    "enableBothColor",
-    "bothColor"
-)
-
-
-
-CreateCheckbox(
-    "Enable Nameplate Size Increase",
-    20,
-    -200,
-    "enableScale"
-)
-
-
-
-
-local scaleSlider = CreateFrame(
-    "Slider",
-    "ShadowDotsScaleSlider",
-    panel,
-    "OptionsSliderTemplate"
-)
-
-
-scaleSlider:SetPoint(
-    "TOPLEFT",
-    20,
-    -250
-)
-
-
-scaleSlider:SetWidth(
-    250
-)
-
-
-scaleSlider:SetMinMaxValues(
-    1,
-    2
-)
-
-
-scaleSlider:SetValueStep(
-    0.05
-)
-
-
-scaleSlider:SetValue(
-    ShadowDotsDB.scaleSize
-)
-
-
-scaleSlider:SetScript(
-    "OnValueChanged",
-    function(self, value)
-
-
-        ShadowDotsDB.scaleSize = value
-
-
-        RefreshColors()
-
-
-    end
-)
-
-
-
-_G["ShadowDotsScaleSliderText"]:SetText(
-    "Nameplate Scale"
-)
-
-
-
-InterfaceOptions_AddCategory(panel)
-
-
 
 SLASH_SHADOWDOTS1 = "/sd"
-
-
-
-SlashCmdList["SHADOWDOTS"] = function()
-
-
-    InterfaceOptionsFrame_OpenToCategory(panel)
-
-    InterfaceOptionsFrame_OpenToCategory(panel)
-
-
+SlashCmdList.SHADOWDOTS = function()
+    local ACD = LibStub("AceConfigDialog-3.0-ElvUI", true)
+    if ACD and ShadowDots.configPath then
+        ACD:Open("ElvUI")
+        ACD:SelectGroup("ElvUI", unpack(ShadowDots.configPath))
+    end
 end
