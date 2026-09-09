@@ -1,242 +1,248 @@
 local E = unpack(ElvUI)
 local plugin = LibStub("LibElvUIPlugin-1.0", true)
+local pendingSpellID
+local dotListArgs
+local BuildDotRows
+local addStatus = ""
 
 local function Refresh()
     if ShadowDots_RefreshVisuals then
         ShadowDots_RefreshVisuals()
     end
+    local registry = LibStub("AceConfigRegistry-3.0-ElvUI", true)
+    if registry then
+        registry:NotifyChange("ElvUI")
+    end
 end
 
-local function SetEnabled(value)
-    ShadowDotsDB.enabled = value
-    ShadowDots_CheckSpec()
+local function Resolve(spellID)
+    local name, icon = ShadowDots_GetSpellMetadata(spellID)
+    if type(icon) == "number" then
+        icon = tostring(icon)
+    elseif type(icon) ~= "string" then
+        icon = nil
+    end
+    return name, icon
 end
 
-local function SetColor(key, r, g, b)
-    ShadowDotsDB[key] = { r = r, g = g, b = b }
+local function FormatHP(value)
+    value = tonumber(value) or 0
+    if value >= 1000000 then
+        return string.format("%.1fM", value / 1000000)
+    elseif value >= 1000 then
+        return string.format("%.1fK", value / 1000)
+    end
+    return tostring(value)
+end
+
+local function AddDot(spellID)
+    spellID = tonumber(spellID)
+    if not spellID or not Resolve(spellID) then
+        addStatus = "|cffff2020Invalid or unavailable spell ID.|r"
+        Refresh()
+        return
+    end
+    if ShadowDotsDB.dots[spellID] then
+        addStatus = "|cffffd966That spell ID is already configured.|r"
+        Refresh()
+        return
+    end
+    local name = Resolve(spellID)
+    ShadowDotsDB.dots[spellID] = {
+        enabled = true, spellID = spellID, displayName = name,
+        color = { r = 1, g = 1, b = 1 }, blendColor = false,
+        blinkEnabled = true, blinkThreshold = 3, blinkSpeed = 0.25,
+        scaleHP = 2000000,
+    }
+    addStatus = "|cff20ff20DoT added.|r"
+    if dotListArgs then
+        for key in pairs(dotListArgs) do
+            if tostring(key):match("^dot%d+$") then
+                dotListArgs[key] = nil
+            end
+        end
+        BuildDotRows(dotListArgs)
+    end
     Refresh()
 end
 
+local function DotRow(spellID, dot, order)
+    local name, icon = Resolve(spellID)
+    local row = {
+        type = "group",
+        name = (dot.displayName or name or "Invalid spell").." ("..tostring(spellID)..")",
+        order = order,
+        inline = true,
+        args = {},
+    }
+    row.args.enabled = {
+        type = "toggle", name = "Enable", desc = "Enable or disable tracking for this DoT.",
+        order = 1, width = "half",
+        get = function() return dot.enabled end,
+        set = function(_, value) dot.enabled = value; Refresh() end,
+    }
+    row.args.icon = {
+        type = "description", name = "", order = 2, width = "half",
+        image = function() return icon end, imageWidth = 20, imageHeight = 20,
+    }
+    row.args.displayName = {
+        type = "input", name = "Name / Spell ID",
+        desc = "Display name only. Changing this does not change the spell ID used for detection.",
+        order = 3, width = "double",
+        get = function() return dot.displayName end,
+        set = function(_, value) dot.displayName = value; Refresh() end,
+    }
+    row.args.color = {
+        type = "color", name = "Color",
+        desc = "The nameplate color used while this DoT is active.",
+        order = 4, width = "half",
+        get = function() return dot.color.r, dot.color.g, dot.color.b end,
+        set = function(_, r, g, b) dot.color = { r = r, g = g, b = b }; Refresh() end,
+    }
+    row.args.blend = {
+        type = "toggle", name = "Blend",
+        desc = "Blend the configured DoT color with ElvUI's native nameplate color.",
+        order = 5, width = "half",
+        get = function() return dot.blendColor end,
+        set = function(_, value) dot.blendColor = value; Refresh() end,
+    }
+    row.args.blink = {
+        type = "toggle", name = "Blink",
+        desc = "Enable expiration blinking for this DoT.",
+        order = 6, width = "half",
+        get = function() return dot.blinkEnabled end,
+        set = function(_, value) dot.blinkEnabled = value end,
+    }
+    row.args.threshold = {
+        type = "range", name = "Blink Threshold", min = 0.5, max = 20, step = 0.5,
+        desc = "Begin blinking when the DoT has this many seconds remaining.",
+        order = 7, width = "half",
+        get = function() return dot.blinkThreshold end,
+        set = function(_, value) dot.blinkThreshold = value end,
+    }
+    row.args.speed = {
+        type = "range", name = "Blink Speed", min = 0.05, max = 2, step = 0.05,
+        desc = "Controls how quickly the nameplate blinks.",
+        order = 8, width = "half",
+        get = function() return dot.blinkSpeed end,
+        set = function(_, value) dot.blinkSpeed = value end,
+    }
+    row.args.scaleHP = {
+        type = "input", name = "Scale HP",
+        desc = "The target's minimum current HP required for this DoT to trigger nameplate scaling.",
+        order = 9, width = "half",
+        get = function() return tostring(dot.scaleHP) end,
+        set = function(_, value) dot.scaleHP = math.max(0, tonumber(value) or dot.scaleHP) end,
+    }
+    row.args.scaleHPDisplay = {
+        type = "description", name = function() return "Current: "..FormatHP(dot.scaleHP) end,
+        order = 9.5, width = "half",
+    }
+    row.args.spellID = {
+        type = "description",
+        name = "Spell ID: "..tostring(spellID)..(name and "" or " |cffff2020Invalid spell|r"),
+        order = 10, width = "full",
+    }
+    return row
+end
+
+BuildDotRows = function(args)
+    local ids = {}
+    if type(ShadowDotsDB) ~= "table" then
+        ShadowDotsDB = {}
+    end
+    if type(ShadowDotsDB.dots) ~= "table" then
+        ShadowDotsDB.dots = {}
+    end
+    local dots = ShadowDotsDB.dots
+    for spellID in pairs(dots) do
+        ids[#ids + 1] = tonumber(spellID)
+    end
+    table.sort(ids)
+    for index, spellID in ipairs(ids) do
+        args["dot"..spellID] = DotRow(spellID, dots[spellID], 20 + index)
+    end
+end
+
 local function RegisterOptions()
+    if type(ShadowDotsDB) ~= "table" then
+        ShadowDotsDB = {}
+    end
+    if type(ShadowDotsDB.dots) ~= "table" then
+        ShadowDotsDB.dots = {}
+    end
     local ACR = LibStub("AceConfigRegistry-3.0-ElvUI", true)
     if not E or not E.Options or not ACR then
         return
     end
+    local dots = {
+        type = "group", name = "Universal DoTs", order = 2,
+        childGroups = "tree", args = {
+            intro = {
+                type = "description", order = 1, width = "full",
+                name = "Player-owned DoTs are identified by spell ID and UnitDebuff(). Multiple active DoTs use the average of their configured colors; Blend averages that result with ElvUI's native color.",
+            },
+            columns = {
+                type = "description", order = 1.5, width = "full",
+                name = "|cffbbbbbbEnable   Icon   Name / ID   Color   Blend   Blink   Threshold   Speed   Scale HP|r",
+            },
+            addID = {
+                type = "input", name = "Add DoT Spell ID", order = 2, width = "double",
+                desc = "Add a DoT by entering its spell ID.",
+                get = function() return pendingSpellID or "" end,
+                set = function(_, value) pendingSpellID = value end,
+            },
+            add = {
+                type = "execute", name = "Add DoT", order = 3,
+                desc = "Add a DoT by entering its spell ID.",
+                func = function() AddDot(pendingSpellID); pendingSpellID = nil end,
+            },
+            status = {
+                type = "description", order = 4, width = "full",
+                name = function() return addStatus end,
+            },
+        },
+    }
+    dotListArgs = dots.args
+    BuildDotRows(dots.args)
 
-    local shadowdotsOptions = {
-        type = "group",
-        name = "ShadowDots",
-        order = 20,
-        childGroups = "tab",
+    local options = {
+        type = "group", name = "ShadowDots", order = 20, childGroups = "tab",
         args = {
             about = {
-                type = "group",
-                name = "About / Welcome",
-                order = 1,
+                type = "group", name = "About / Welcome", order = 1,
                 args = {
-                    title = {
-                        type = "header",
-                        name = "|cffb366ffElvUI ShadowDots|r",
-                        order = 1,
-                    },
-                    subtitle = {
-                        type = "description",
-                        name = "|cffd8c8e8Shadow Priest Nameplate & DoT System|r\n|cff999999Legion 7.2.5 / WoWZone|r",
-                        order = 2,
-                    },
-                    spacer = {
-                        type = "description",
-                        name = " ",
-                        order = 3,
-                    },
-                    creator = {
-                        type = "description",
-                        name = "|cffffd966Created by|r\n|cffffffffHexman (Narco)|r",
-                        order = 4,
-                        fontSize = "large",
-                    },
-                    description = {
-                        type = "description",
-                        name = "\nDesigned and developed for WoWZone 7.2.5.",
-                        order = 5,
-                    },
+                    title = { type = "header", name = "|cffb366ffElvUI ShadowDots|r", order = 1 },
+                    text = { type = "description", name = "|cffd8c8e8Universal DoT Nameplate System|r\n|cff999999Legion 7.2.5 / WoWZone|r\n\n|cffffd966Created by|r\n|cffffffffHexman (Narco)|r\n\nDesigned and developed for WoWZone 7.2.5.", order = 2, fontSize = "large" },
                 },
             },
             general = {
-                type = "group",
-                name = "General",
-                order = 2,
+                type = "group", name = "General", order = 2,
                 args = {
                     enabled = {
-                        type = "toggle",
-                        name = "Enable ShadowDots",
-                        order = 1,
+                        type = "toggle", name = "Enable ShadowDots", order = 1,
                         get = function() return ShadowDotsDB.enabled end,
-                        set = function(_, value) SetEnabled(value) end,
+                        set = function(_, value) ShadowDotsDB.enabled = value; ShadowDots_CheckEnabled() end,
                     },
-                    status = {
-                        type = "description",
-                        name = function()
-                            if ShadowDots_IsShadowPriest() then
-                                return "|cff20ff20Shadow specialization detected: Enabled|r"
-                            end
-                            return "|cffff2020Shadow specialization not detected: Inactive|r"
-                        end,
-                        order = 2,
-                    },
-                },
-            },
-            colors = {
-                type = "group",
-                name = "DoT Colors",
-                order = 3,
-                args = {
-                    swp = {
-                        type = "color",
-                        name = "Shadow Word: Pain Only",
-                        order = 1,
-                        get = function()
-                            local c = ShadowDotsDB.swpColor
-                            return c.r, c.g, c.b
-                        end,
-                        set = function(_, r, g, b) SetColor("swpColor", r, g, b) end,
-                    },
-                    vt = {
-                        type = "color",
-                        name = "Vampiric Touch Only",
-                        order = 2,
-                        get = function()
-                            local c = ShadowDotsDB.vtColor
-                            return c.r, c.g, c.b
-                        end,
-                        set = function(_, r, g, b) SetColor("vtColor", r, g, b) end,
-                    },
-                    both = {
-                        type = "color",
-                        name = "Both SW:P + VT",
-                        order = 3,
-                        get = function()
-                            local c = ShadowDotsDB.bothColor
-                            return c.r, c.g, c.b
-                        end,
-                        set = function(_, r, g, b) SetColor("bothColor", r, g, b) end,
-                    },
-                },
-            },
-            expiration = {
-                type = "group",
-                name = "Expiration / Blinking",
-                order = 4,
-                args = {
-                    enabled = {
-                        type = "toggle",
-                        name = "Enable Blinking",
-                        order = 1,
-                        get = function() return ShadowDotsDB.blinkEnabled end,
-                        set = function(_, value)
-                            ShadowDotsDB.blinkEnabled = value
-                            if value and ShadowDots.enabled then
-                                ShadowDots_StartBlinking()
-                            elseif not value then
-                                ShadowDots_StopBlinking()
-                            end
-                        end,
-                    },
-                    threshold = {
-                        type = "range",
-                        name = "Expiration Threshold",
-                        min = 0.5,
-                        max = 10,
-                        step = 0.5,
-                        order = 2,
-                        get = function() return ShadowDotsDB.blinkThreshold end,
-                        set = function(_, value) ShadowDotsDB.blinkThreshold = value end,
-                    },
-                    speed = {
-                        type = "range",
-                        name = "Blink Speed",
-                        min = 0.05,
-                        max = 1,
-                        step = 0.05,
-                        order = 3,
-                        get = function() return ShadowDotsDB.blinkSpeed end,
-                        set = function(_, value) ShadowDotsDB.blinkSpeed = value end,
-                    },
-                    swp = {
-                        type = "toggle",
-                        name = "Blink SW:P",
-                        order = 4,
-                        get = function() return ShadowDotsDB.blinkSWP end,
-                        set = function(_, value) ShadowDotsDB.blinkSWP = value end,
-                    },
-                    vt = {
-                        type = "toggle",
-                        name = "Blink VT",
-                        order = 5,
-                        get = function() return ShadowDotsDB.blinkVT end,
-                        set = function(_, value) ShadowDotsDB.blinkVT = value end,
-                    },
-                    alpha = {
-                        type = "range",
-                        name = "Blink Alpha",
-                        min = 0.05,
-                        max = 1,
-                        step = 0.05,
-                        order = 6,
+                    blinkAlpha = {
+                        type = "range", name = "Blink Alpha", min = 0.05, max = 1, step = 0.05, order = 2,
                         get = function() return ShadowDotsDB.blinkAlpha end,
                         set = function(_, value) ShadowDotsDB.blinkAlpha = value end,
                     },
                 },
             },
+            dots = dots,
             priority = {
-                type = "group",
-                name = "Priority / Tracker",
-                order = 5,
+                type = "group", name = "Priority / Tracker", order = 4,
                 args = {
-                    enableScale = {
-                        type = "toggle",
-                        name = "Enable Priority Scale",
-                        order = 1,
-                        get = function() return ShadowDotsDB.enableScale end,
-                        set = function(_, value)
-                            ShadowDotsDB.enableScale = value
-                            Refresh()
-                        end,
-                    },
-                    scaleSize = {
-                        type = "range",
-                        name = "Priority Scale",
-                        min = 1,
-                        max = 2,
-                        step = 0.05,
-                        order = 2,
-                        get = function() return ShadowDotsDB.scaleSize end,
-                        set = function(_, value)
-                            ShadowDotsDB.scaleSize = value
-                            Refresh()
-                        end,
-                    },
+                    enableScale = { type = "toggle", name = "Enable HP Scaling", order = 1, get = function() return ShadowDotsDB.enableScale end, set = function(_, v) ShadowDotsDB.enableScale = v; Refresh() end },
+                    scaleSize = { type = "range", name = "Scale Size", min = 1, max = 2, step = 0.05, order = 2, get = function() return ShadowDotsDB.scaleSize end, set = function(_, v) ShadowDotsDB.scaleSize = v; Refresh() end },
                 },
             },
             debug = {
-                type = "group",
-                name = "Debug",
-                order = 6,
+                type = "group", name = "Debug", order = 5,
                 args = {
-                    enabled = {
-                        type = "toggle",
-                        name = "Enable Debug Messages",
-                        order = 1,
-                        get = function() return ShadowDotsDB.debug end,
-                        set = function(_, value)
-                            ShadowDotsDB.debug = value
-                            if value and ShadowDots_StartWatchdog then
-                                ShadowDots_StartWatchdog()
-                            elseif not value and ShadowDots_StopWatchdog then
-                                ShadowDots_StopWatchdog()
-                            end
-                        end,
-                    },
+                    enabled = { type = "toggle", name = "Enable Debug Messages", order = 1, get = function() return ShadowDotsDB.debug end, set = function(_, value) ShadowDotsDB.debug = value; if value then ShadowDots_StartWatchdog() else ShadowDots_StopWatchdog() end end },
                 },
             },
         },
@@ -244,14 +250,13 @@ local function RegisterOptions()
 
     local nameplateOptions = E.Options.args.nameplate
     if nameplateOptions and nameplateOptions.args then
-        nameplateOptions.args.shadowdots = shadowdotsOptions
-        shadowdotsOptions.order = 90
-        ShadowDots.configPath = {"nameplate", "shadowdots"}
+        nameplateOptions.args.shadowdots = options
+        options.order = 90
+        ShadowDots.configPath = { "nameplate", "shadowdots" }
     else
-        E.Options.args.shadowdots = shadowdotsOptions
-        ShadowDots.configPath = {"shadowdots"}
+        E.Options.args.shadowdots = options
+        ShadowDots.configPath = { "shadowdots" }
     end
-
     ACR:NotifyChange("ElvUI")
 end
 

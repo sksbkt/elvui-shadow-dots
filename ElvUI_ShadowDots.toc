@@ -1,6 +1,6 @@
 ## Interface: 70200
 ## Title: ElvUI ShadowDots
-## Notes: Shadow Priest DoT Tracker
+## Notes: Universal player-owned DoT nameplate tracker
 ## Author: HeXman
 ## Version: 0.1
 

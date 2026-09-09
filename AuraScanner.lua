@@ -1,7 +1,7 @@
-local SWP = 589
-local VT = 34914
-
 local function GetMob(unit)
+    if type(unit) ~= "string" or unit == "" then
+        return
+    end
     local guid = UnitGUID(unit)
     if guid and ShadowDots.mobs[guid] then
         return ShadowDots.mobs[guid]
@@ -32,54 +32,51 @@ local function FindUnitByGUID(guid)
     end
 end
 
-local function GetState(hasSWP, hasVT)
-    if hasSWP and hasVT then
-        return "BOTH"
-    elseif hasSWP then
-        return "SWP_ONLY"
-    elseif hasVT then
-        return "VT_ONLY"
+local function GetState(active)
+    local count = 0
+    for _ in pairs(active) do
+        count = count + 1
     end
-    return "NONE"
+    if count == 0 then
+        return "NONE"
+    elseif count == 1 then
+        for spellID in pairs(active) do
+            return "DOT_"..tostring(spellID)
+        end
+    end
+    return "MULTIPLE"
 end
 
 function ShadowDots_ScanMob(mob)
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest() or not mob or not UnitExists(mob.unit) then
+    if not ShadowDots.enabled or not mob or not UnitExists(mob.unit) then
         return
     end
 
-    local hasSWP, hasVT = false, false
-    local swpExpiration, vtExpiration
+    local active = {}
     local index = 1
-
     while true do
-        local name, _, _, _, _, duration, expirationTime, unitCaster, _, _, spellID = UnitDebuff(mob.unit, index)
+        local name, _, _, _, _, _, expirationTime, unitCaster, _, _, spellID = UnitDebuff(mob.unit, index)
         if not name then
             break
         end
-        if unitCaster == "player" then
-            if spellID == SWP then
-                hasSWP = true
-                swpExpiration = expirationTime
-            elseif spellID == VT then
-                hasVT = true
-                vtExpiration = expirationTime
-            end
+        local dot = ShadowDots_GetDot(spellID)
+        if dot and dot.enabled and unitCaster == "player" then
+            active[spellID] = {
+                expiration = expirationTime,
+                dot = dot,
+            }
         end
         index = index + 1
     end
 
     local oldState = mob.state
-    mob.hasSWP = hasSWP
-    mob.hasVT = hasVT
-    mob.swpExpiration = swpExpiration
-    mob.vtExpiration = vtExpiration
-    mob.state = GetState(hasSWP, hasVT)
-
+    mob.activeDots = active
+    mob.state = GetState(active)
+    mob.hasDots = next(active) ~= nil
     ShadowDots_Debug("scan", GetTime(), mob.unit, DebugMob(mob),
-        "SWP", hasSWP, "VT", hasVT, "state", mob.state, "owned", mob.colorOwned)
+        "active", mob.state, "owned", mob.colorOwned)
+
     if oldState ~= mob.state or (mob.plate and not mob.colorOwned) then
-        ShadowDots_Debug("state", mob.name, mob.state)
         if ShadowDots_ApplyNameplateColor then
             ShadowDots_ApplyNameplateColor(mob)
         end
@@ -95,43 +92,23 @@ frame:RegisterEvent("UNIT_THREAT_LIST_UPDATE")
 frame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 frame:SetScript("OnEvent", function(self, event, ...)
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest() then
+    if not ShadowDots.enabled then
         return
     end
 
     if event == "PLAYER_REGEN_DISABLED" then
-        ShadowDots_Debug("PLAYER_REGEN_DISABLED", GetTime())
         if ShadowDots_ScanNameplates then
             ShadowDots_ScanNameplates()
         end
-        if C_Timer and C_Timer.After then
-            C_Timer.After(0.1, function()
-                if ShadowDots.enabled and ShadowDots_IsShadowPriest()
-                and ShadowDots_ScanNameplates then
-                    ShadowDots_Debug("combat-entry rescan")
-                    ShadowDots_ScanNameplates()
-                end
-            end)
-        end
         return
     end
 
-    if event == "UNIT_AURA" then
+    if event == "UNIT_AURA" or event == "UNIT_THREAT_LIST_UPDATE" then
         local unit = select(1, ...)
         local mob = GetMob(unit)
-        ShadowDots_Debug("UNIT_AURA", GetTime(), unit, DebugMob(mob))
+        ShadowDots_Debug(event, GetTime(), unit, DebugMob(mob))
         if mob then
-            ShadowDots_ScanMob(mob)
-        end
-        return
-    end
-
-    if event == "UNIT_THREAT_LIST_UPDATE" then
-        local unit = select(1, ...)
-        local mob = GetMob(unit)
-        ShadowDots_Debug("UNIT_THREAT_LIST_UPDATE", GetTime(), unit, DebugMob(mob))
-        if mob then
-            if ShadowDots_ScheduleFinalReconcile then
+            if event == "UNIT_THREAT_LIST_UPDATE" and ShadowDots_ScheduleFinalReconcile then
                 ShadowDots_ScheduleFinalReconcile(unit)
             else
                 ShadowDots_ScanMob(mob)
@@ -144,13 +121,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
     local sourceGUID = select(4, ...)
     local destGUID = select(8, ...)
     local spellID = select(12, ...)
+    local dot = ShadowDots_GetDot(spellID)
     local mob = ShadowDots.mobs[destGUID]
     if mob then
         mob.inCombat = true
     end
-    if sourceGUID == UnitGUID("player") and (spellID == SWP or spellID == VT) then
-        ShadowDots_Debug("COMBAT_LOG", GetTime(), eventType,
-            spellID == SWP and "SWP" or "VT", "destGUID", destGUID, DebugMob(mob))
+    if sourceGUID == UnitGUID("player") and dot then
+        ShadowDots_Debug("COMBAT_LOG", GetTime(), eventType, spellID, "destGUID", destGUID, DebugMob(mob))
         if not mob then
             local unit = FindUnitByGUID(destGUID)
             if unit and ShadowDots_ScanNameplates then
@@ -162,8 +139,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
             ShadowDots_ScanMob(mob)
             if C_Timer and C_Timer.After then
                 C_Timer.After(0.1, function()
-                    if ShadowDots.enabled and ShadowDots_IsShadowPriest()
-                    and ShadowDots.mobs[mob.guid] == mob then
+                    if ShadowDots.enabled and ShadowDots.mobs[mob.guid] == mob then
                         ShadowDots_ScanMob(mob)
                     end
                 end)

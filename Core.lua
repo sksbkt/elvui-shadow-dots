@@ -1,12 +1,14 @@
+if type(ShadowDotsDB) ~= "table" then
+    ShadowDotsDB = {}
+end
+if type(ShadowDotsDB.dots) ~= "table" then
+    ShadowDotsDB.dots = {}
+end
+
 ShadowDots = ShadowDots or {}
 ShadowDots.enabled = false
 ShadowDots.mobs = ShadowDots.mobs or {}
 ShadowDots.plates = ShadowDots.plates or {}
-
-function ShadowDots_IsShadowPriest()
-    local spec = GetSpecialization()
-    return spec and GetSpecializationInfo(spec) == 258
-end
 
 function ShadowDots_Debug(...)
     if ShadowDotsDB.debug then
@@ -15,7 +17,7 @@ function ShadowDots_Debug(...)
 end
 
 function ShadowDots_Enable()
-    if ShadowDots.enabled or not ShadowDotsDB.enabled or not ShadowDots_IsShadowPriest() then
+    if ShadowDots.enabled or not ShadowDotsDB.enabled then
         return
     end
 
@@ -53,8 +55,8 @@ function ShadowDots_Disable()
     ShadowDots_Debug("disabled")
 end
 
-function ShadowDots_CheckSpec()
-    if ShadowDots_IsShadowPriest() and ShadowDotsDB.enabled then
+function ShadowDots_CheckEnabled()
+    if ShadowDotsDB.enabled then
         ShadowDots_Enable()
     else
         ShadowDots_Disable()
@@ -63,12 +65,9 @@ end
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
-frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-frame:SetScript("OnEvent", function(self, event, unit)
+frame:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
-        ShadowDots_CheckSpec()
-    elseif event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
-        ShadowDots_CheckSpec()
+        ShadowDots_CheckEnabled()
     end
 end)

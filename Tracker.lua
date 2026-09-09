@@ -2,16 +2,6 @@ local frame = CreateFrame("Frame")
 frame.elapsed = 0
 local watchdog
 
-local function WatchdogColor(state)
-    if state == "SWP_ONLY" then
-        return ShadowDotsDB.swpColor
-    elseif state == "VT_ONLY" then
-        return ShadowDotsDB.vtColor
-    elseif state == "BOTH" then
-        return ShadowDotsDB.bothColor
-    end
-end
-
 local function DifferentColor(r1, g1, b1, r2, g2, b2)
     return r1 ~= r2 or g1 ~= g2 or b1 ~= b2
 end
@@ -23,49 +13,38 @@ local function WatchdogMob(mob)
     if not mob.unit or not plate or not unitFrame or not health then
         return
     end
-
     local r, g, b = health:GetStatusBarColor()
-    local expected = WatchdogColor(mob.state)
+    local expectedR, expectedG, expectedB
+    local count = 0
+    for _, active in pairs(mob.activeDots or {}) do
+        count = count + 1
+        expectedR = (expectedR or 0) + active.dot.color.r
+        expectedG = (expectedG or 0) + active.dot.color.g
+        expectedB = (expectedB or 0) + active.dot.color.b
+    end
+    if count > 0 then
+        expectedR, expectedG, expectedB = expectedR / count, expectedG / count, expectedB / count
+    end
     local snapshot = mob.watchdogSnapshot
     local changed = not snapshot
-        or snapshot.guid ~= mob.guid
-        or snapshot.unit ~= mob.unit
-        or snapshot.plate ~= plate
-        or snapshot.health ~= health
-        or snapshot.state ~= mob.state
-        or snapshot.colorOwned ~= mob.colorOwned
+        or snapshot.guid ~= mob.guid or snapshot.unit ~= mob.unit
+        or snapshot.plate ~= plate or snapshot.health ~= health
+        or snapshot.state ~= mob.state or snapshot.colorOwned ~= mob.colorOwned
         or DifferentColor(snapshot.r, snapshot.g, snapshot.b, r, g, b)
-
-    if expected and mob.colorOwned
-    and DifferentColor(expected.r, expected.g, expected.b, r, g, b) then
-        changed = true
-    end
-
     if changed and ShadowDotsDB.debug then
         ShadowDots_Debug("Watchdog", "time", GetTime(), "guid", mob.guid,
             "unit", mob.unit, "state", mob.state, "owner", mob.colorOwned,
-            "expected", expected and expected.r or "native",
-            expected and expected.g or "", expected and expected.b or "",
-            "actual", r, g, b, "swp", mob.hasSWP, "vt", mob.hasVT,
-            "swpExp", mob.swpExpiration, "vtExp", mob.vtExpiration,
-            "plate", tostring(plate), "health", tostring(health))
+            "expected", expectedR or "native", expectedG or "", expectedB or "",
+            "actual", r, g, b, "plate", tostring(plate), "health", tostring(health))
     end
-
     mob.watchdogSnapshot = {
-        guid = mob.guid,
-        unit = mob.unit,
-        plate = plate,
-        health = health,
-        state = mob.state,
-        colorOwned = mob.colorOwned,
-        r = r,
-        g = g,
-        b = b,
+        guid = mob.guid, unit = mob.unit, plate = plate, health = health,
+        state = mob.state, colorOwned = mob.colorOwned, r = r, g = g, b = b,
     }
 end
 
 local function WatchdogTick()
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest() or not ShadowDotsDB.debug then
+    if not ShadowDots.enabled or not ShadowDotsDB.debug then
         return
     end
     for _, mob in pairs(ShadowDots.mobs) do
@@ -103,41 +82,46 @@ local function StopBlink(mob)
     mob.blinking = false
 end
 
-local function IsExpiring(mob)
-    if mob.hasSWP and ShadowDotsDB.blinkSWP and mob.swpExpiration then
-        if mob.swpExpiration - GetTime() <= ShadowDotsDB.blinkThreshold then
-            return true
+local function GetExpiring(mob, now)
+    local speed
+    local expiring = false
+    for _, active in pairs(mob.activeDots or {}) do
+        local dot = active.dot
+        if dot.blinkEnabled and active.expiration and active.expiration - now <= dot.blinkThreshold then
+            expiring = true
+            speed = not speed and dot.blinkSpeed or math.min(speed, dot.blinkSpeed)
         end
     end
-    if mob.hasVT and ShadowDotsDB.blinkVT and mob.vtExpiration then
-        if mob.vtExpiration - GetTime() <= ShadowDotsDB.blinkThreshold then
-            return true
-        end
-    end
-    return false
+    return expiring, speed
 end
 
-local function UpdateBlinking()
+local function UpdateBlinking(elapsed)
+    local now = GetTime()
     for _, mob in pairs(ShadowDots.mobs) do
-        if not mob.plate
-        and (not mob.swpExpiration or mob.swpExpiration <= GetTime())
-        and (not mob.vtExpiration or mob.vtExpiration <= GetTime()) then
+        local activeDots = mob.activeDots
+        local hasActive = activeDots and next(activeDots) ~= nil
+        if not mob.plate and not hasActive then
             ShadowDots.mobs[mob.guid] = nil
-        elseif mob.hasSWP or mob.hasVT then
-            local now = GetTime()
-            if (mob.swpExpiration and mob.swpExpiration <= now)
-            or (mob.vtExpiration and mob.vtExpiration <= now) then
-                if ShadowDots_ScanMob then
+        elseif hasActive then
+            mob.blinkElapsed = (mob.blinkElapsed or 0) + elapsed
+            for _, active in pairs(mob.activeDots) do
+                if active.expiration and active.expiration <= now and ShadowDots_ScanMob then
                     ShadowDots_ScanMob(mob)
+                    break
                 end
             end
+            local expiring, speed = GetExpiring(mob, now)
             local health = mob.plate and mob.plate.UnitFrame and mob.plate.UnitFrame.HealthBar
-            if ShadowDotsDB.blinkEnabled and IsExpiring(mob) and health and mob.colorOwned then
-                mob.blinking = true
-                mob.blinkPhase = not mob.blinkPhase
-                health:SetAlpha(mob.blinkPhase and ShadowDotsDB.blinkAlpha or 1)
+            if expiring and health and mob.colorOwned then
+                if mob.blinkElapsed >= speed then
+                    mob.blinking = true
+                    mob.blinkPhase = not mob.blinkPhase
+                    health:SetAlpha(mob.blinkPhase and ShadowDotsDB.blinkAlpha or 1)
+                    mob.blinkElapsed = 0
+                end
             else
                 StopBlink(mob)
+                mob.blinkElapsed = 0
             end
         else
             StopBlink(mob)
@@ -146,15 +130,15 @@ local function UpdateBlinking()
 end
 
 local function OnUpdate(self, elapsed)
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest() then
+    if not ShadowDots.enabled then
         return
     end
     self.elapsed = self.elapsed + elapsed
-    if self.elapsed < ShadowDotsDB.blinkSpeed then
+    if self.elapsed < 0.05 then
         return
     end
     self.elapsed = 0
-    UpdateBlinking()
+    UpdateBlinking(elapsed)
 end
 
 function ShadowDots_StartBlinking()

@@ -12,22 +12,28 @@ local function GetElvUI()
     return unpack(_G.ElvUI)
 end
 
-local function RestoreElvUIColor(mob)
+local function RecalculateNativeColor(mob)
     local frame = mob.plate and mob.plate.UnitFrame
-    local E = GetElvUI()
     local health = GetHealthBar(mob)
-    if not frame or not E or not health then
+    local E = GetElvUI()
+    if not frame or not health or not E then
+        return 1, 1, 1
+    end
+    local nameplates = E:GetModule("NamePlates", true)
+    if not nameplates or not nameplates.UpdateElement_HealthColor then
+        return health:GetStatusBarColor()
+    end
+    health.r, health.g, health.b = nil, nil, nil
+    nameplates:UpdateElement_HealthColor(frame)
+    return health:GetStatusBarColor()
+end
+
+local function RestoreElvUIColor(mob)
+    local health = GetHealthBar(mob)
+    if not health then
         return
     end
-
-    local nameplates = E:GetModule("NamePlates", true)
-    if nameplates and nameplates.UpdateElement_HealthColor then
-        ShadowDots_Debug("native color reconciliation", GetTime(), mob.unit, mob.guid,
-            "before", health.r, health.g, health.b)
-        health.r, health.g, health.b = nil, nil, nil
-        nameplates:UpdateElement_HealthColor(frame)
-        ShadowDots_Debug("native color result", health.r, health.g, health.b)
-    end
+    RecalculateNativeColor(mob)
 end
 
 function ShadowDots_RestoreNameplate(mob, force)
@@ -41,70 +47,77 @@ function ShadowDots_RestoreNameplate(mob, force)
     mob.colorState = nil
 end
 
+local function BuildDoTColor(mob)
+    local count = 0
+    local shouldBlend = false
+    local r, g, b = 0, 0, 0
+    for _, active in pairs(mob.activeDots or {}) do
+        count = count + 1
+        r = r + active.dot.color.r
+        g = g + active.dot.color.g
+        b = b + active.dot.color.b
+        shouldBlend = shouldBlend or active.dot.blendColor
+    end
+    if count == 0 then
+        return nil
+    end
+    r, g, b = r / count, g / count, b / count
+    if shouldBlend then
+        local nr, ng, nb = RecalculateNativeColor(mob)
+        r, g, b = (r + nr) / 2, (g + ng) / 2, (b + nb) / 2
+    end
+    return r, g, b
+end
+
 function ShadowDots_ApplyNameplateColor(mob)
     if not ShadowDots.enabled then
         return
     end
-
-    local state = mob.state
-    if state == "NONE" then
+    local health = GetHealthBar(mob)
+    if not health then
+        return
+    end
+    local r, g, b = BuildDoTColor(mob)
+    if not r then
         ShadowDots_RestoreNameplate(mob)
         return
     end
-
-    local color = ShadowDotsDB[state == "SWP_ONLY" and "swpColor"
-        or state == "VT_ONLY" and "vtColor" or "bothColor"]
-    local health = GetHealthBar(mob)
-    if not color or not health then
-        return
-    end
-
-    if mob.colorOwned and mob.colorState == state then
-        return
-    end
-    ShadowDots_Debug("apply", GetTime(), mob.unit, mob.guid, "plate",
-        mob.plate and tostring(mob.plate) or "nil", "health", tostring(health),
-        "state", state, "owned", mob.colorOwned, "rgb", color.r, color.g, color.b,
-        "before", health.r, health.g, health.b)
-    health:SetStatusBarColor(color.r, color.g, color.b)
+    health:SetStatusBarColor(r, g, b)
     mob.colorOwned = true
-    mob.colorState = state
-    ShadowDots_Debug("color", mob.name, state, color.r, color.g, color.b)
+    mob.colorState = mob.state
+    ShadowDots_Debug("apply", GetTime(), mob.unit, mob.guid,
+        "state", mob.state, "rgb", r, g, b)
 end
 
 local function UpdateScale()
     if not ShadowDots.enabled then
         return
     end
-
-    if not ShadowDotsDB.enableScale then
-        for _, mob in pairs(ShadowDots.mobs) do
-            if mob.plate and mob.plate.UnitFrame then
-                mob.plate.UnitFrame:SetScale(1)
-            end
-        end
-        return
-    end
-
-    local bestTarget
-    local bestPriority = -1
     for _, mob in pairs(ShadowDots.mobs) do
-        if mob.plate and mob.unit
-        and UnitExists(mob.unit) and UnitAffectingCombat(mob.unit) then
-            local priority = 0
-            if not mob.hasVT then priority = priority + 100 end
-            if not mob.hasSWP then priority = priority + 100 end
-            if priority > bestPriority then
-                bestPriority = priority
-                bestTarget = mob
-            end
-        end
         if mob.plate and mob.plate.UnitFrame then
             mob.plate.UnitFrame:SetScale(1)
         end
     end
-    if bestTarget and bestTarget.plate and bestTarget.plate.UnitFrame then
-        bestTarget.plate.UnitFrame:SetScale(ShadowDotsDB.scaleSize)
+    if not ShadowDotsDB.enableScale then
+        return
+    end
+
+    for _, mob in pairs(ShadowDots.mobs) do
+        if mob.plate and mob.unit and UnitExists(mob.unit) and mob.hasDots then
+            local hp = UnitHealth(mob.unit)
+            for _, active in pairs(mob.activeDots) do
+                if active.dot.scaleHP and hp >= active.dot.scaleHP
+                then
+                    mob.scaleThreshold = math.max(mob.scaleThreshold or 0, active.dot.scaleHP)
+                end
+            end
+        end
+    end
+    for _, mob in pairs(ShadowDots.mobs) do
+        if mob.scaleThreshold and mob.plate and mob.plate.UnitFrame then
+            mob.plate.UnitFrame:SetScale(ShadowDotsDB.scaleSize)
+        end
+        mob.scaleThreshold = nil
     end
 end
 
@@ -113,7 +126,7 @@ function ShadowDots_UpdatePriority()
 end
 
 function ShadowDots_RefreshVisuals()
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest() then
+    if not ShadowDots.enabled then
         return
     end
     for _, mob in pairs(ShadowDots.mobs) do

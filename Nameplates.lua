@@ -45,7 +45,7 @@ local function RemoveNameplate(unit)
 end
 
 function ShadowDots_ReconcileNameplate(mob, unit, guid, plate)
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest()
+    if not ShadowDots.enabled
     or not mob or ShadowDots.mobs[guid] ~= mob
     or UnitGUID(unit) ~= guid
     or C_NamePlate.GetNamePlateForUnit(unit) ~= plate
@@ -80,7 +80,7 @@ local function DeferReconcile(mob, unit, guid, plate)
 end
 
 function ShadowDots_ScheduleFinalReconcile(unit)
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest()
+    if not ShadowDots.enabled
     or not UnitExists(unit) then
         return
     end
@@ -106,7 +106,7 @@ function ShadowDots_ScheduleFinalReconcile(unit)
 end
 
 local function AddNameplate(unit)
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest() or not UnitExists(unit) then
+    if not ShadowDots.enabled or not UnitExists(unit) then
         return
     end
     if not UnitCanAttack("player", unit) then
@@ -149,10 +149,8 @@ local function AddNameplate(unit)
         guid = guid,
         classification = UnitClassification(unit),
         inCombat = false,
-        hasVT = false,
-        hasSWP = false,
-        swpExpiration = nil,
-        vtExpiration = nil,
+        activeDots = {},
+        hasDots = false,
         state = "NONE",
         colorOwned = false,
         blinking = false,
@@ -181,7 +179,7 @@ frame:SetScript("OnEvent", function(self, event, unit)
 end)
 
 function ShadowDots_ScanNameplates()
-    if not ShadowDots.enabled or not ShadowDots_IsShadowPriest() then
+    if not ShadowDots.enabled then
         return
     end
     for i = 1, 40 do
