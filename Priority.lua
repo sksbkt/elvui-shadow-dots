@@ -1,143 +1,139 @@
 local function GetHealthBar(mob)
-
     if not mob.plate or not mob.plate.UnitFrame then
         return nil
     end
-
     return mob.plate.UnitFrame.HealthBar
-        or mob.plate.UnitFrame.Health
-        or mob.plate.UnitFrame.healthBar
-
 end
 
-
-
-local function SetHealthColor(mob, r, g, b)
-
-    local health = GetHealthBar(mob)
-
-    if health then
-        health:SetStatusBarColor(r, g, b)
+local function GetElvUI()
+    if not _G.ElvUI then
+        return nil
     end
-
+    return unpack(_G.ElvUI)
 end
 
-
-
-local function ResetHealthColor(mob)
-
-    SetHealthColor(mob, 1, 1, 1)
-
+local function RecalculateNativeColor(mob)
+    local frame = mob.plate and mob.plate.UnitFrame
+    local health = GetHealthBar(mob)
+    local E = GetElvUI()
+    if not frame or not health or not E then
+        return 1, 1, 1
+    end
+    local nameplates = E:GetModule("NamePlates", true)
+    if not nameplates or not nameplates.UpdateElement_HealthColor then
+        return health:GetStatusBarColor()
+    end
+    health.r, health.g, health.b = nil, nil, nil
+    nameplates:UpdateElement_HealthColor(frame)
+    return health:GetStatusBarColor()
 end
 
+local function RestoreElvUIColor(mob)
+    local health = GetHealthBar(mob)
+    if not health then
+        return
+    end
+    RecalculateNativeColor(mob)
+end
 
+function ShadowDots_RestoreNameplate(mob, force)
+    if not force and not mob.colorOwned then
+        return
+    end
+    ShadowDots_Debug("release", GetTime(), mob.unit, mob.guid,
+        "state", mob.state, "owned", mob.colorOwned, "forced", force and true or false)
+    RestoreElvUIColor(mob)
+    mob.colorOwned = false
+    mob.colorState = nil
+end
 
-function ShadowDots_HighlightTarget()
+local function BuildDoTColor(mob)
+    local count = 0
+    local shouldBlend = false
+    local r, g, b = 0, 0, 0
+    for _, active in pairs(mob.activeDots or {}) do
+        count = count + 1
+        r = r + active.dot.color.r
+        g = g + active.dot.color.g
+        b = b + active.dot.color.b
+        shouldBlend = shouldBlend or active.dot.blendColor
+    end
+    if count == 0 then
+        return nil
+    end
+    r, g, b = r / count, g / count, b / count
+    if shouldBlend then
+        local nr, ng, nb = RecalculateNativeColor(mob)
+        r, g, b = (r + nr) / 2, (g + ng) / 2, (b + nb) / 2
+    end
+    return r, g, b
+end
 
+function ShadowDots_ApplyNameplateColor(mob)
     if not ShadowDots.enabled then
         return
     end
+    local health = GetHealthBar(mob)
+    if not health then
+        return
+    end
+    local r, g, b = BuildDoTColor(mob)
+    if not r then
+        ShadowDots_RestoreNameplate(mob)
+        return
+    end
+    health:SetStatusBarColor(r, g, b)
+    mob.colorOwned = true
+    mob.colorState = mob.state
+    ShadowDots_Debug("apply", GetTime(), mob.unit, mob.guid,
+        "state", mob.state, "rgb", r, g, b)
+end
 
-    if not ShadowDots_IsShadowPriest() then
+local function UpdateScale()
+    if not ShadowDots.enabled then
+        return
+    end
+    for _, mob in pairs(ShadowDots.mobs) do
+        if mob.plate and mob.plate.UnitFrame then
+            mob.plate.UnitFrame:SetScale(1)
+        end
+    end
+    if not ShadowDotsDB.enableScale then
         return
     end
 
-
-    for guid, mob in pairs(ShadowDots.mobs) do
-
-        if UnitExists(mob.unit) then
-
-            -- Always reset first
-            ResetHealthColor(mob)
-
-            if mob.plate and mob.plate.UnitFrame then
-                mob.plate.UnitFrame:SetScale(1)
-            end
-
-
-            -- Only highlight enemies that are actually in combat
-            if UnitAffectingCombat(mob.unit) then
-
-                -- Missing both DoTs
-                if not mob.hasVT and not mob.hasSWP then
-
-                    if ShadowDotsDB.enableBothColor then
-                        local c = ShadowDotsDB.bothColor
-                        SetHealthColor(mob, c.r, c.g, c.b)
-                    end
-
-                -- Missing Vampiric Touch
-                elseif mob.hasSWP and not mob.hasVT then
-
-                    if ShadowDotsDB.enableVTColor then
-                        local c = ShadowDotsDB.vtColor
-                        SetHealthColor(mob, c.r, c.g, c.b)
-                    end
-
-                -- Missing Shadow Word: Pain
-                elseif mob.hasVT and not mob.hasSWP then
-
-                    if ShadowDotsDB.enableSWPColor then
-                        local c = ShadowDotsDB.swpColor
-                        SetHealthColor(mob, c.r, c.g, c.b)
-                    end
-
+    for _, mob in pairs(ShadowDots.mobs) do
+        if mob.plate and mob.unit and UnitExists(mob.unit) and mob.hasDots then
+            local hp = UnitHealth(mob.unit)
+            for _, active in pairs(mob.activeDots) do
+                if active.dot.scaleHP and hp >= active.dot.scaleHP
+                then
+                    mob.scaleThreshold = math.max(mob.scaleThreshold or 0, active.dot.scaleHP)
                 end
-
             end
-
         end
-
     end
-
-
-    if ShadowDotsDB.enableScale then
-
-        local bestTarget = nil
-        local bestPriority = -1
-
-        for guid, mob in pairs(ShadowDots.mobs) do
-
-            if UnitExists(mob.unit)
-            and UnitAffectingCombat(mob.unit) then
-
-                local priority = 0
-
-                if not mob.hasVT then
-                    priority = priority + 100
-                end
-
-                if not mob.hasSWP then
-                    priority = priority + 100
-                end
-
-                if priority > bestPriority then
-                    bestPriority = priority
-                    bestTarget = mob
-                end
-
-            end
-
+    for _, mob in pairs(ShadowDots.mobs) do
+        if mob.scaleThreshold and mob.plate and mob.plate.UnitFrame then
+            mob.plate.UnitFrame:SetScale(ShadowDotsDB.scaleSize)
         end
-
-        if bestTarget
-        and bestTarget.plate
-        and bestTarget.plate.UnitFrame then
-
-            bestTarget.plate.UnitFrame:SetScale(
-                ShadowDotsDB.scaleSize
-            )
-
-        end
-
+        mob.scaleThreshold = nil
     end
-
 end
 
-
-
 function ShadowDots_UpdatePriority()
+    UpdateScale()
+end
 
-    ShadowDots_HighlightTarget()
-
+function ShadowDots_RefreshVisuals()
+    if not ShadowDots.enabled then
+        return
+    end
+    for _, mob in pairs(ShadowDots.mobs) do
+        if mob.state ~= "NONE" then
+            mob.colorState = nil
+        end
+        ShadowDots_ApplyNameplateColor(mob)
+    end
+    UpdateScale()
 end
