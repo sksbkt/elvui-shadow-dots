@@ -12,6 +12,34 @@ local function GetElvUI()
     return unpack(_G.ElvUI)
 end
 
+local nativeColorHooked
+local restoringNativeColor
+
+local function ProtectOwnedHealthColor(frame)
+    if restoringNativeColor or not ShadowDotsDB.enableColor then
+        return
+    end
+    for _, mob in pairs(ShadowDots.mobs) do
+        if mob.colorOwned and mob.plate and mob.plate.UnitFrame == frame then
+            ShadowDots_ApplyNameplateColor(mob)
+            return
+        end
+    end
+end
+
+local function HookNativeHealthColor()
+    if nativeColorHooked or not hooksecurefunc then
+        return
+    end
+    local E = GetElvUI()
+    local nameplates = E and E:GetModule("NamePlates", true)
+    if not nameplates or not nameplates.UpdateElement_HealthColor then
+        return
+    end
+    hooksecurefunc(nameplates, "UpdateElement_HealthColor", ProtectOwnedHealthColor)
+    nativeColorHooked = true
+end
+
 local function RecalculateNativeColor(mob)
     local frame = mob.plate and mob.plate.UnitFrame
     local health = GetHealthBar(mob)
@@ -42,37 +70,39 @@ function ShadowDots_RestoreNameplate(mob, force)
     end
     ShadowDots_Debug("release", GetTime(), mob.unit, mob.guid,
         "state", mob.state, "owned", mob.colorOwned, "forced", force and true or false)
+    restoringNativeColor = true
     RestoreElvUIColor(mob)
+    restoringNativeColor = nil
     mob.colorOwned = false
     mob.colorState = nil
 end
 
 local function BuildDoTColor(mob)
     local count = 0
-    local shouldBlend = false
-    local r, g, b = 0, 0, 0
+    local singleColor
     for _, active in pairs(mob.activeDots or {}) do
-        count = count + 1
-        r = r + active.dot.color.r
-        g = g + active.dot.color.g
-        b = b + active.dot.color.b
-        shouldBlend = shouldBlend or active.dot.blendColor
+        if ShadowDots_IsDotAllowedForCurrentSpec(active.dot) then
+            count = count + 1
+            singleColor = active.dot.color
+        end
     end
     if count == 0 then
         return nil
+    elseif count == 1 then
+        return singleColor.r, singleColor.g, singleColor.b
     end
-    r, g, b = r / count, g / count, b / count
-    if shouldBlend then
-        local nr, ng, nb = RecalculateNativeColor(mob)
-        r, g, b = (r + nr) / 2, (g + ng) / 2, (b + nb) / 2
-    end
-    return r, g, b
+    local color = ShadowDots_GetMultiDotColor()
+    return color.r, color.g, color.b
 end
 
 function ShadowDots_ApplyNameplateColor(mob)
-    if not ShadowDots.enabled then
+    if not ShadowDots.enabled or not ShadowDotsDB.enableColor then
+        if mob.colorOwned then
+            ShadowDots_RestoreNameplate(mob, true)
+        end
         return
     end
+    HookNativeHealthColor()
     local health = GetHealthBar(mob)
     if not health then
         return
@@ -89,35 +119,67 @@ function ShadowDots_ApplyNameplateColor(mob)
         "state", mob.state, "rgb", r, g, b)
 end
 
-local function UpdateScale()
-    if not ShadowDots.enabled then
-        return
+local function GetDotScale(mob)
+    if not ShadowDotsDB.enableScale or not mob.combatEngaged
+    or not mob.unit or not UnitExists(mob.unit) then
+        return 1
     end
-    for _, mob in pairs(ShadowDots.mobs) do
-        if mob.plate and mob.plate.UnitFrame then
-            mob.plate.UnitFrame:SetScale(1)
+    local hp = UnitHealth(mob.unit)
+    local scale = 1
+    local activeDots = mob.activeDots or {}
+    for spellID, dot in pairs(ShadowDotsDB.dots or {}) do
+        local configuredSpellID = tonumber(spellID) or spellID
+        if type(dot) == "table"
+        and dot.enabled
+        and dot.scaleEnabled
+        and not activeDots[configuredSpellID]
+        and ShadowDots_IsDotAllowedForCurrentSpec(dot)
+        and hp > (dot.scaleHP or 0) then
+            scale = math.max(scale, dot.scaleMultiplier or 1)
         end
     end
-    if not ShadowDotsDB.enableScale then
-        return
-    end
+    return scale
+end
 
+local function GetRequiredScale(mob)
+    if not ShadowDotsDB.enableScale then
+        return 1
+    end
+    local scale = 1
+    if ShadowDotsDB.combatScaleEnabled and mob.combatEngaged then
+        scale = math.max(scale, ShadowDotsDB.combatScale or 1)
+    end
+    return math.max(scale, GetDotScale(mob))
+end
+
+function ShadowDots_ReleaseScale(mob)
+    local frame = mob.plate and mob.plate.UnitFrame
+    if frame and mob.scaleOwned then
+        frame:SetScale(mob.nativeScale or 1)
+    end
+    mob.scaleOwned = false
+    mob.nativeScale = nil
+end
+
+local function UpdateScale()
     for _, mob in pairs(ShadowDots.mobs) do
-        if mob.plate and mob.unit and UnitExists(mob.unit) and mob.hasDots then
-            local hp = UnitHealth(mob.unit)
-            for _, active in pairs(mob.activeDots) do
-                if active.dot.scaleHP and hp >= active.dot.scaleHP
-                then
-                    mob.scaleThreshold = math.max(mob.scaleThreshold or 0, active.dot.scaleHP)
+        local frame = mob.plate and mob.plate.UnitFrame
+        if frame then
+            if not ShadowDots.enabled then
+                ShadowDots_ReleaseScale(mob)
+            else
+                local required = GetRequiredScale(mob)
+                if required > 1 then
+                    if not mob.scaleOwned then
+                        mob.nativeScale = frame.GetScale and frame:GetScale() or 1
+                        mob.scaleOwned = true
+                    end
+                    frame:SetScale(math.max(mob.nativeScale or 1, required))
+                else
+                    ShadowDots_ReleaseScale(mob)
                 end
             end
         end
-    end
-    for _, mob in pairs(ShadowDots.mobs) do
-        if mob.scaleThreshold and mob.plate and mob.plate.UnitFrame then
-            mob.plate.UnitFrame:SetScale(ShadowDotsDB.scaleSize)
-        end
-        mob.scaleThreshold = nil
     end
 end
 
@@ -130,10 +192,14 @@ function ShadowDots_RefreshVisuals()
         return
     end
     for _, mob in pairs(ShadowDots.mobs) do
-        if mob.state ~= "NONE" then
+        if not ShadowDotsDB.enableColor then
+            ShadowDots_RestoreNameplate(mob, true)
+        elseif mob.state ~= "NONE" then
             mob.colorState = nil
+            ShadowDots_ApplyNameplateColor(mob)
+        else
+            ShadowDots_ApplyNameplateColor(mob)
         end
-        ShadowDots_ApplyNameplateColor(mob)
     end
     UpdateScale()
 end

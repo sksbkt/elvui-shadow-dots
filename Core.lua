@@ -45,8 +45,8 @@ function ShadowDots_Disable()
         if ShadowDots_RestoreNameplate then
             ShadowDots_RestoreNameplate(mob)
         end
-        if mob.plate and mob.plate.UnitFrame then
-            mob.plate.UnitFrame:SetScale(1)
+        if ShadowDots_ReleaseScale then
+            ShadowDots_ReleaseScale(mob)
         end
     end
 

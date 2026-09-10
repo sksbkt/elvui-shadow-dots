@@ -60,7 +60,8 @@ function ShadowDots_ScanMob(mob)
             break
         end
         local dot = ShadowDots_GetDot(spellID)
-        if dot and dot.enabled and unitCaster == "player" then
+        if dot and dot.enabled and ShadowDots_IsDotAllowedForCurrentSpec(dot)
+        and unitCaster == "player" then
             active[spellID] = {
                 expiration = expirationTime,
                 dot = dot,
@@ -84,13 +85,22 @@ function ShadowDots_ScanMob(mob)
             ShadowDots_UpdatePriority()
         end
     end
+    if ShadowDots_NotifyStatusChanged then
+        ShadowDots_NotifyStatusChanged()
+    end
 end
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("UNIT_AURA")
 frame:RegisterEvent("UNIT_THREAT_LIST_UPDATE")
+frame:RegisterEvent("UNIT_HEALTH")
+frame:RegisterEvent("UNIT_MAXHEALTH")
 frame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 frame:RegisterEvent("PLAYER_REGEN_DISABLED")
+frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+frame:RegisterEvent("PLAYER_TALENT_UPDATE")
+frame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
+frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 frame:SetScript("OnEvent", function(self, event, ...)
     if not ShadowDots.enabled then
         return
@@ -100,6 +110,36 @@ frame:SetScript("OnEvent", function(self, event, ...)
         if ShadowDots_ScanNameplates then
             ShadowDots_ScanNameplates()
         end
+        for _, mob in pairs(ShadowDots.mobs) do
+            mob.combatEngaged = mob.unit and UnitThreatSituation("player", mob.unit) ~= nil or false
+        end
+        if ShadowDots_UpdatePriority then
+            ShadowDots_UpdatePriority()
+        end
+        return
+    end
+
+    if event == "PLAYER_REGEN_ENABLED" then
+        for _, mob in pairs(ShadowDots.mobs) do
+            mob.combatEngaged = false
+        end
+        if ShadowDots_UpdatePriority then
+            ShadowDots_UpdatePriority()
+        end
+        return
+    end
+
+    if event == "PLAYER_TALENT_UPDATE" or event == "ACTIVE_TALENT_GROUP_CHANGED"
+    or event == "PLAYER_SPECIALIZATION_CHANGED" then
+        if ShadowDots_ScanNameplates then
+            ShadowDots_ScanNameplates()
+        end
+        if ShadowDots_UpdatePriority then
+            ShadowDots_UpdatePriority()
+        end
+        if ShadowDots_NotifyStatusChanged then
+            ShadowDots_NotifyStatusChanged()
+        end
         return
     end
 
@@ -108,11 +148,25 @@ frame:SetScript("OnEvent", function(self, event, ...)
         local mob = GetMob(unit)
         ShadowDots_Debug(event, GetTime(), unit, DebugMob(mob))
         if mob then
+            if event == "UNIT_THREAT_LIST_UPDATE" then
+                mob.combatEngaged = UnitThreatSituation("player", unit) ~= nil
+            end
             if event == "UNIT_THREAT_LIST_UPDATE" and ShadowDots_ScheduleFinalReconcile then
                 ShadowDots_ScheduleFinalReconcile(unit)
             else
                 ShadowDots_ScanMob(mob)
             end
+            if ShadowDots_UpdatePriority then
+                ShadowDots_UpdatePriority()
+            end
+        end
+        return
+    end
+
+    if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
+        local mob = GetMob(select(1, ...))
+        if mob and ShadowDots_UpdatePriority then
+            ShadowDots_UpdatePriority()
         end
         return
     end
@@ -122,11 +176,19 @@ frame:SetScript("OnEvent", function(self, event, ...)
     local destGUID = select(8, ...)
     local spellID = select(12, ...)
     local dot = ShadowDots_GetDot(spellID)
+    local playerGUID = UnitGUID("player")
     local mob = ShadowDots.mobs[destGUID]
-    if mob then
-        mob.inCombat = true
+    if not mob and destGUID == playerGUID then
+        mob = ShadowDots.mobs[sourceGUID]
     end
-    if sourceGUID == UnitGUID("player") and dot then
+    if mob and (sourceGUID == playerGUID or destGUID == playerGUID) then
+        mob.inCombat = true
+        mob.combatEngaged = true
+        if ShadowDots_UpdatePriority then
+            ShadowDots_UpdatePriority()
+        end
+    end
+    if sourceGUID == playerGUID and dot then
         ShadowDots_Debug("COMBAT_LOG", GetTime(), eventType, spellID, "destGUID", destGUID, DebugMob(mob))
         if not mob then
             local unit = FindUnitByGUID(destGUID)

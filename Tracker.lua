@@ -87,9 +87,11 @@ local function GetExpiring(mob, now)
     local expiring = false
     for _, active in pairs(mob.activeDots or {}) do
         local dot = active.dot
-        if dot.blinkEnabled and active.expiration and active.expiration - now <= dot.blinkThreshold then
+        if ShadowDots_IsDotAllowedForCurrentSpec(dot)
+        and dot.blinkEnabled and active.expiration
+        and active.expiration - now <= dot.blinkThreshold then
             expiring = true
-            speed = not speed and dot.blinkSpeed or math.min(speed, dot.blinkSpeed)
+            speed = not speed and 0.25 or math.min(speed, 0.25)
         end
     end
     return expiring, speed
@@ -98,6 +100,10 @@ end
 local function UpdateBlinking(elapsed)
     local now = GetTime()
     for _, mob in pairs(ShadowDots.mobs) do
+        if not ShadowDotsDB.enableBlink then
+            StopBlink(mob)
+            mob.blinkElapsed = 0
+        else
         local activeDots = mob.activeDots
         local hasActive = activeDots and next(activeDots) ~= nil
         if not mob.plate and not hasActive then
@@ -116,7 +122,7 @@ local function UpdateBlinking(elapsed)
                 if mob.blinkElapsed >= speed then
                     mob.blinking = true
                     mob.blinkPhase = not mob.blinkPhase
-                    health:SetAlpha(mob.blinkPhase and ShadowDotsDB.blinkAlpha or 1)
+                    health:SetAlpha(mob.blinkPhase and 0.35 or 1)
                     mob.blinkElapsed = 0
                 end
             else
@@ -125,6 +131,7 @@ local function UpdateBlinking(elapsed)
             end
         else
             StopBlink(mob)
+        end
         end
     end
 end
@@ -144,7 +151,9 @@ end
 function ShadowDots_StartBlinking()
     frame.elapsed = 0
     frame:SetScript("OnUpdate", OnUpdate)
-    ShadowDots_StartWatchdog()
+    if ShadowDotsDB.debug and ShadowDotsDB.watchdog then
+        ShadowDots_StartWatchdog()
+    end
 end
 
 function ShadowDots_StopBlinking()

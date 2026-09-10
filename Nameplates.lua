@@ -22,6 +22,9 @@ local function DetachMob(mob)
     end
     if mob.plate then
         ShadowDots.plates[mob.plate] = nil
+        if ShadowDots_ReleaseScale then
+            ShadowDots_ReleaseScale(mob)
+        end
         if mob.blinking and mob.plate.UnitFrame and mob.plate.UnitFrame.HealthBar then
             mob.plate.UnitFrame.HealthBar:SetAlpha(1)
         end
@@ -31,6 +34,9 @@ local function DetachMob(mob)
     mob.colorOwned = false
     mob.colorState = nil
     mob.blinking = false
+    if ShadowDots_NotifyStatusChanged then
+        ShadowDots_NotifyStatusChanged()
+    end
 end
 
 local function RemoveNameplate(unit)
@@ -128,6 +134,7 @@ local function AddNameplate(unit)
         existing.plate = plate
         existing.name = UnitName(unit)
         existing.classification = UnitClassification(unit)
+        existing.combatEngaged = UnitThreatSituation("player", unit) ~= nil
         ShadowDots.plates[plate] = guid
         if ShadowDots_ScanMob then
             ShadowDots_ScanMob(existing)
@@ -154,6 +161,8 @@ local function AddNameplate(unit)
         state = "NONE",
         colorOwned = false,
         blinking = false,
+        combatEngaged = UnitThreatSituation("player", unit) ~= nil,
+        scaleOwned = false,
     }
     ShadowDots.mobs[guid] = mob
     ShadowDots.plates[plate] = guid
